@@ -23,12 +23,7 @@ const icons = {
 };
 
 function startEngine() {
-  if (typeof STOCKFISH === "function") {
-    engine = STOCKFISH();
-    engine.postMessage("uci");
-  } else {
-    alert("Stockfish не загрузился. Проверь интернет или CDN.");
-  }
+  engine = null;
 }
 
 function renderBoard() {
