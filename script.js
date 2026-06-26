@@ -11,155 +11,187 @@ const voiceBtn = document.getElementById("voiceBtn");
 const movesEl = document.getElementById("moves");
 const video = document.getElementById("camera");
 
-const files = "abcdefgh";
+const game = new Chess();
+
+let selected = null;
+let gameStarted = false;
+let engine = null;
 
 const icons = {
   wp: "♙", wr: "♖", wn: "♘", wb: "♗", wq: "♕", wk: "♔",
   bp: "♟", br: "♜", bn: "♞", bb: "♝", bq: "♛", bk: "♚"
 };
 
-let selected = null;
-let gameStarted = false;
-let turn = "w";
-let board = initialBoard();
-
-function initialBoard() {
-  return [
-    ["br","bn","bb","bq","bk","bb","bn","br"],
-    ["bp","bp","bp","bp","bp","bp","bp","bp"],
-    [null,null,null,null,null,null,null,null],
-    [null,null,null,null,null,null,null,null],
-    [null,null,null,null,null,null,null,null],
-    [null,null,null,null,null,null,null,null],
-    ["wp","wp","wp","wp","wp","wp","wp","wp"],
-    ["wr","wn","wb","wq","wk","wb","wn","wr"]
-  ];
+function startEngine() {
+  if (typeof STOCKFISH === "function") {
+    engine = STOCKFISH();
+    engine.postMessage("uci");
+  } else {
+    alert("Stockfish не загрузился. Проверь интернет или CDN.");
+  }
 }
 
 function renderBoard() {
   boardEl.innerHTML = "";
+
+  const position = game.board();
 
   for (let r = 0; r < 8; r++) {
     for (let c = 0; c < 8; c++) {
       const square = document.createElement("div");
       square.className = "square " + ((r + c) % 2 === 0 ? "light" : "dark");
 
-      if (selected && selected.r === r && selected.c === c) {
+      const coord = toCoord(r, c);
+      square.dataset.coord = coord;
+
+      if (selected === coord) {
         square.classList.add("selected");
       }
 
-      square.textContent = board[r][c] ? icons[board[r][c]] : "";
-      square.onclick = () => clickSquare(r, c);
+      const piece = position[r][c];
+
+      if (piece) {
+        square.textContent = icons[piece.color + piece.type];
+      }
+
+      square.onclick = () => clickSquare(coord);
 
       boardEl.appendChild(square);
     }
   }
 }
 
-function clickSquare(r, c) {
-  if (!gameStarted || turn !== "w") return;
+function clickSquare(coord) {
+  if (!gameStarted) return;
+  if (game.turn() !== "w") return;
 
-  const piece = board[r][c];
+  const piece = game.get(coord);
 
   if (!selected) {
-    if (piece && piece[0] === "w") {
-      selected = { r, c };
+    if (piece && piece.color === "w") {
+      selected = coord;
       renderBoard();
     }
     return;
   }
 
-  const move = {
+  const move = game.move({
     from: selected,
-    to: { r, c }
-  };
+    to: coord,
+    promotion: "q"
+  });
 
   selected = null;
 
-  if (isLegalMove(board, move, "w")) {
-    makeMove(move, true);
-    setTimeout(botMove, 500);
+  if (move) {
+    addMove("Ты", move);
+    afterMove();
+
+    if (!game.game_over()) {
+      setTimeout(botMove, 400);
+    }
   } else {
     speak("Так нельзя ходить");
     statusEl.textContent = "Нелегальный ход";
-    renderBoard();
   }
-}
 
-function makeMove(move, human) {
-  const piece = board[move.from.r][move.from.c];
-
-  board[move.to.r][move.to.c] = piece;
-  board[move.from.r][move.from.c] = null;
-
-  if (piece === "wp" && move.to.r === 0) board[move.to.r][move.to.c] = "wq";
-  if (piece === "bp" && move.to.r === 7) board[move.to.r][move.to.c] = "bq";
-
-  turn = turn === "w" ? "b" : "w";
-
-  const text = `${human ? "Ты" : "Бот"}: ${posToCoord(move.from.r, move.from.c)} → ${posToCoord(move.to.r, move.to.c)}`;
-  const li = document.createElement("li");
-  li.textContent = text;
-  movesEl.appendChild(li);
-
-  statusEl.textContent = turn === "w" ? "Твой ход" : "Бот думает";
   renderBoard();
 }
 
 function botMove() {
-  if (!gameStarted || turn !== "b") return;
-
-  const moves = generateMoves(board, "b");
-
-  if (moves.length === 0) {
-    speak("У меня нет ходов");
+  if (!engine) {
+    randomBotMove();
     return;
   }
 
   const level = Number(levelEl.value);
-  let move;
+  const depth = Math.max(1, Math.min(15, level + 2));
 
-  if (level <= 3) {
-    move = moves[Math.floor(Math.random() * moves.length)];
-  } else {
-    move = chooseBestMove(moves);
-  }
+  statusEl.textContent = "Бот думает...";
 
-  speak(describeMove(move));
-  makeMove(move, false);
-}
+  engine.postMessage("position fen " + game.fen());
+  engine.postMessage("go depth " + depth);
 
-function chooseBestMove(moves) {
-  let best = moves[0];
-  let bestScore = -9999;
+  engine.onmessage = function (event) {
+    const line = event.data || event;
 
-  for (const move of moves) {
-    const target = board[move.to.r][move.to.c];
-    let score = target ? pieceValue(target) : 0;
+    if (typeof line === "string" && line.startsWith("bestmove")) {
+      const bestMove = line.split(" ")[1];
 
-    if (score > bestScore) {
-      bestScore = score;
-      best = move;
+      if (!bestMove || bestMove === "(none)") {
+        statusEl.textContent = "У бота нет ходов";
+        return;
+      }
+
+      const from = bestMove.slice(0, 2);
+      const to = bestMove.slice(2, 4);
+      const promotion = bestMove.slice(4, 5) || "q";
+
+      const move = game.move({
+        from,
+        to,
+        promotion
+      });
+
+      if (move) {
+        speak(describeMove(move));
+        addMove("Бот", move);
+        afterMove();
+        renderBoard();
+      }
     }
-  }
-
-  return best;
+  };
 }
 
-function pieceValue(piece) {
-  const type = piece[1];
-  if (type === "p") return 1;
-  if (type === "n") return 3;
-  if (type === "b") return 3;
-  if (type === "r") return 5;
-  if (type === "q") return 9;
-  if (type === "k") return 100;
-  return 0;
+function randomBotMove() {
+  const moves = game.moves({ verbose: true });
+
+  if (moves.length === 0) {
+    afterMove();
+    return;
+  }
+
+  const move = moves[Math.floor(Math.random() * moves.length)];
+  const played = game.move(move);
+
+  speak(describeMove(played));
+  addMove("Бот", played);
+  afterMove();
+  renderBoard();
+}
+
+function afterMove() {
+  if (game.in_checkmate()) {
+    gameStarted = false;
+    const winner = game.turn() === "w" ? "Чёрные выиграли. Мат." : "Белые выиграли. Мат.";
+    statusEl.textContent = winner;
+    speak(winner);
+    return;
+  }
+
+  if (game.in_draw()) {
+    gameStarted = false;
+    statusEl.textContent = "Ничья";
+    speak("Ничья");
+    return;
+  }
+
+  if (game.in_check()) {
+    statusEl.textContent = "Шах";
+    speak("Шах");
+    return;
+  }
+
+  statusEl.textContent = game.turn() === "w" ? "Твой ход" : "Бот думает";
+}
+
+function addMove(who, move) {
+  const li = document.createElement("li");
+  li.textContent = `${who}: ${move.from} → ${move.to}`;
+  movesEl.appendChild(li);
 }
 
 function describeMove(move) {
-  const piece = board[move.from.r][move.from.c];
-
   const names = {
     p: "пешку",
     n: "коня",
@@ -169,111 +201,17 @@ function describeMove(move) {
     k: "короля"
   };
 
-  return `Передвинь ${names[piece[1]]} с ${posToCoord(move.from.r, move.from.c)} на ${posToCoord(move.to.r, move.to.c)}`;
+  return `Передвинь ${names[move.piece]} с ${move.from} на ${move.to}`;
 }
 
-function generateMoves(b, color) {
-  const moves = [];
-
-  for (let r = 0; r < 8; r++) {
-    for (let c = 0; c < 8; c++) {
-      const piece = b[r][c];
-
-      if (!piece || piece[0] !== color) continue;
-
-      for (let tr = 0; tr < 8; tr++) {
-        for (let tc = 0; tc < 8; tc++) {
-          const move = {
-            from: { r, c },
-            to: { r: tr, c: tc }
-          };
-
-          if (isLegalMove(b, move, color)) {
-            moves.push(move);
-          }
-        }
-      }
-    }
-  }
-
-  return moves;
-}
-
-function isLegalMove(b, move, color) {
-  const piece = b[move.from.r][move.from.c];
-  const target = b[move.to.r][move.to.c];
-
-  if (!piece || piece[0] !== color) return false;
-  if (target && target[0] === color) return false;
-
-  const dr = move.to.r - move.from.r;
-  const dc = move.to.c - move.from.c;
-  const absR = Math.abs(dr);
-  const absC = Math.abs(dc);
-  const type = piece[1];
-
-  if (type === "p") {
-    const dir = color === "w" ? -1 : 1;
-    const startRow = color === "w" ? 6 : 1;
-
-    if (dc === 0 && dr === dir && !target) return true;
-    if (dc === 0 && dr === 2 * dir && move.from.r === startRow && !target) return true;
-    if (absC === 1 && dr === dir && target) return true;
-
-    return false;
-  }
-
-  if (type === "n") {
-    return (absR === 2 && absC === 1) || (absR === 1 && absC === 2);
-  }
-
-  if (type === "b") {
-    return absR === absC && pathClear(b, move);
-  }
-
-  if (type === "r") {
-    return (dr === 0 || dc === 0) && pathClear(b, move);
-  }
-
-  if (type === "q") {
-    return (absR === absC || dr === 0 || dc === 0) && pathClear(b, move);
-  }
-
-  if (type === "k") {
-    return absR <= 1 && absC <= 1;
-  }
-
-  return false;
-}
-
-function pathClear(b, move) {
-  const dr = Math.sign(move.to.r - move.from.r);
-  const dc = Math.sign(move.to.c - move.from.c);
-
-  let r = move.from.r + dr;
-  let c = move.from.c + dc;
-
-  while (r !== move.to.r || c !== move.to.c) {
-    if (b[r][c]) return false;
-    r += dr;
-    c += dc;
-  }
-
-  return true;
-}
-
-function posToCoord(r, c) {
+function toCoord(r, c) {
+  const files = "abcdefgh";
   return files[c] + (8 - r);
 }
 
-function coordToPos(coord) {
-  return {
-    r: 8 - Number(coord[1]),
-    c: files.indexOf(coord[0])
-  };
-}
-
 function userTextMove(text) {
+  if (!gameStarted || game.turn() !== "w") return;
+
   const raw = text.toLowerCase().replace(/\s/g, "");
   const match = raw.match(/^([a-h][1-8])([a-h][1-8])$/);
 
@@ -282,16 +220,23 @@ function userTextMove(text) {
     return;
   }
 
-  const move = {
-    from: coordToPos(match[1]),
-    to: coordToPos(match[2])
-  };
+  const move = game.move({
+    from: match[1],
+    to: match[2],
+    promotion: "q"
+  });
 
-  if (isLegalMove(board, move, "w")) {
-    makeMove(move, true);
-    setTimeout(botMove, 500);
+  if (move) {
+    addMove("Ты", move);
+    afterMove();
+    renderBoard();
+
+    if (!game.game_over()) {
+      setTimeout(botMove, 400);
+    }
   } else {
     speak("Так нельзя ходить");
+    statusEl.textContent = "Нелегальный ход";
   }
 }
 
@@ -338,16 +283,16 @@ cameraBtn.onclick = startCamera;
 
 startBtn.onclick = () => {
   gameStarted = true;
-  turn = "w";
+  selected = null;
   statusEl.textContent = "Игра началась. Ты играешь белыми.";
   speak("Игра началась. Ты играешь белыми.");
+  renderBoard();
 };
 
 resetBtn.onclick = () => {
-  board = initialBoard();
+  game.reset();
   selected = null;
   gameStarted = false;
-  turn = "w";
   movesEl.innerHTML = "";
   statusEl.textContent = "Новая игра. Нажми Start.";
   renderBoard();
@@ -360,4 +305,5 @@ levelEl.oninput = () => {
   levelText.textContent = levelEl.value;
 };
 
+startEngine();
 renderBoard();
