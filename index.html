@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Chess Voice Camera Bot</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <main class="app">
+    <h1>♟️ Chess Voice Bot</h1>
+
+    <video id="camera" autoplay playsinline muted></video>
+
+    <div class="controls">
+      <label>
+        Сложность:
+        <input id="level" type="range" min="1" max="10" value="4" />
+        <span id="levelText">4</span>
+      </label>
+
+      <button id="cameraBtn">Включить камеру</button>
+      <button id="startBtn">Start</button>
+      <button id="resetBtn">Новая игра</button>
+    </div>
+
+    <p id="status">Нажми Start. Ты играешь белыми.</p>
+
+    <div id="board" class="board"></div>
+
+    <div class="move-input">
+      <input id="moveInput" placeholder="например: e2e4" />
+      <button id="moveBtn">Сделать ход</button>
+    </div>
+
+    <button id="voiceBtn">🎙️ Сказать ход голосом</button>
+
+    <ol id="moves"></ol>
+  </main>
+
+  <script src="script.js"></script>
+</body>
+</html>
