@@ -15,20 +15,23 @@ const game = new Chess();
 
 let selected = null;
 let gameStarted = false;
-let engine = null;
 
 const icons = {
   wp: "♙", wr: "♖", wn: "♘", wb: "♗", wq: "♕", wk: "♔",
   bp: "♟", br: "♜", bn: "♞", bb: "♝", bq: "♛", bk: "♚"
 };
 
-function startEngine() {
-  engine = null;
-}
+const pieceNames = {
+  p: "пешку",
+  n: "коня",
+  b: "слона",
+  r: "ладью",
+  q: "ферзя",
+  k: "короля"
+};
 
 function renderBoard() {
   boardEl.innerHTML = "";
-
   const position = game.board();
 
   for (let r = 0; r < 8; r++) {
@@ -37,28 +40,19 @@ function renderBoard() {
       square.className = "square " + ((r + c) % 2 === 0 ? "light" : "dark");
 
       const coord = toCoord(r, c);
-      square.dataset.coord = coord;
-
-      if (selected === coord) {
-        square.classList.add("selected");
-      }
-
       const piece = position[r][c];
 
-      if (piece) {
-        square.textContent = icons[piece.color + piece.type];
-      }
+      if (selected === coord) square.classList.add("selected");
+      if (piece) square.textContent = icons[piece.color + piece.type];
 
       square.onclick = () => clickSquare(coord);
-
       boardEl.appendChild(square);
     }
   }
 }
 
 function clickSquare(coord) {
-  if (!gameStarted) return;
-  if (game.turn() !== "w") return;
+  if (!gameStarted || game.turn() !== "w") return;
 
   const piece = game.get(coord);
 
@@ -78,75 +72,41 @@ function clickSquare(coord) {
 
   selected = null;
 
-  if (move) {
-    addMove("Ты", move);
-    afterMove();
-
-    if (!game.game_over()) {
-      setTimeout(botMove, 400);
-    }
-  } else {
-    speak("Так нельзя ходить");
+  if (!move) {
     statusEl.textContent = "Нелегальный ход";
+    speak("Так нельзя ходить");
+    renderBoard();
+    return;
+  }
+
+  addMove("Ты", move);
+  afterMove();
+
+  if (!game.game_over()) {
+    setTimeout(botMove, 500);
   }
 
   renderBoard();
 }
 
 function botMove() {
-  if (!engine) {
-    randomBotMove();
-    return;
-  }
+  if (!gameStarted || game.turn() !== "b") return;
 
-  const level = Number(levelEl.value);
-  const depth = Math.max(1, Math.min(15, level + 2));
-
-  statusEl.textContent = "Бот думает...";
-
-  engine.postMessage("position fen " + game.fen());
-  engine.postMessage("go depth " + depth);
-
-  engine.onmessage = function (event) {
-    const line = event.data || event;
-
-    if (typeof line === "string" && line.startsWith("bestmove")) {
-      const bestMove = line.split(" ")[1];
-
-      if (!bestMove || bestMove === "(none)") {
-        statusEl.textContent = "У бота нет ходов";
-        return;
-      }
-
-      const from = bestMove.slice(0, 2);
-      const to = bestMove.slice(2, 4);
-      const promotion = bestMove.slice(4, 5) || "q";
-
-      const move = game.move({
-        from,
-        to,
-        promotion
-      });
-
-      if (move) {
-        speak(describeMove(move));
-        addMove("Бот", move);
-        afterMove();
-        renderBoard();
-      }
-    }
-  };
-}
-
-function randomBotMove() {
   const moves = game.moves({ verbose: true });
-
   if (moves.length === 0) {
     afterMove();
     return;
   }
 
-  const move = moves[Math.floor(Math.random() * moves.length)];
+  const level = Number(levelEl.value);
+  let move;
+
+  if (level <= 3) {
+    move = moves[Math.floor(Math.random() * moves.length)];
+  } else {
+    move = chooseBestMove(moves);
+  }
+
   const played = game.move(move);
 
   speak(describeMove(played));
@@ -155,12 +115,44 @@ function randomBotMove() {
   renderBoard();
 }
 
+function chooseBestMove(moves) {
+  const values = { p: 1, n: 3, b: 3, r: 5, q: 9, k: 100 };
+
+  let best = moves[0];
+  let bestScore = -999;
+
+  for (const move of moves) {
+    let score = 0;
+
+    if (move.captured) {
+      score += values[move.captured] * 10;
+    }
+
+    if (move.flags.includes("p")) {
+      score += 8;
+    }
+
+    if (move.san.includes("+")) {
+      score += 2;
+    }
+
+    if (score > bestScore) {
+      bestScore = score;
+      best = move;
+    }
+  }
+
+  return best;
+}
+
 function afterMove() {
   if (game.in_checkmate()) {
     gameStarted = false;
-    const winner = game.turn() === "w" ? "Чёрные выиграли. Мат." : "Белые выиграли. Мат.";
-    statusEl.textContent = winner;
-    speak(winner);
+    const text = game.turn() === "w"
+      ? "Чёрные выиграли. Мат."
+      : "Белые выиграли. Мат.";
+    statusEl.textContent = text;
+    speak(text);
     return;
   }
 
@@ -182,21 +174,13 @@ function afterMove() {
 
 function addMove(who, move) {
   const li = document.createElement("li");
-  li.textContent = `${who}: ${move.from} → ${move.to}`;
+  li.textContent = `${who}: ${move.from} → ${move.to} (${move.san})`;
   movesEl.appendChild(li);
+  movesEl.scrollTop = movesEl.scrollHeight;
 }
 
 function describeMove(move) {
-  const names = {
-    p: "пешку",
-    n: "коня",
-    b: "слона",
-    r: "ладью",
-    q: "ферзя",
-    k: "короля"
-  };
-
-  return `Передвинь ${names[move.piece]} с ${move.from} на ${move.to}`;
+  return `Передвинь ${pieceNames[move.piece]} с ${move.from} на ${move.to}`;
 }
 
 function toCoord(r, c) {
@@ -207,11 +191,24 @@ function toCoord(r, c) {
 function userTextMove(text) {
   if (!gameStarted || game.turn() !== "w") return;
 
-  const raw = text.toLowerCase().replace(/\s/g, "");
+  const raw = text
+    .toLowerCase()
+    .replaceAll(" ", "")
+    .replaceAll("на", "")
+    .replaceAll("-", "")
+    .replaceAll("е", "e")
+    .replaceAll("а", "a")
+    .replaceAll("б", "b")
+    .replaceAll("с", "c")
+    .replaceAll("д", "d")
+    .replaceAll("ф", "f")
+    .replaceAll("г", "g")
+    .replaceAll("аш", "h");
+
   const match = raw.match(/^([a-h][1-8])([a-h][1-8])$/);
 
   if (!match) {
-    speak("Напиши ход в формате e2e4");
+    speak("Скажи или напиши ход в формате e2 e4");
     return;
   }
 
@@ -221,23 +218,28 @@ function userTextMove(text) {
     promotion: "q"
   });
 
-  if (move) {
-    addMove("Ты", move);
-    afterMove();
-    renderBoard();
-
-    if (!game.game_over()) {
-      setTimeout(botMove, 400);
-    }
-  } else {
+  if (!move) {
     speak("Так нельзя ходить");
     statusEl.textContent = "Нелегальный ход";
+    return;
+  }
+
+  addMove("Ты", move);
+  afterMove();
+  renderBoard();
+
+  if (!game.game_over()) {
+    setTimeout(botMove, 500);
   }
 }
 
 function speak(text) {
+  if (!window.speechSynthesis) return;
+
   const msg = new SpeechSynthesisUtterance(text);
   msg.lang = "ru-RU";
+  msg.rate = 0.95;
+
   speechSynthesis.cancel();
   speechSynthesis.speak(msg);
 }
@@ -260,12 +262,15 @@ function startVoiceInput() {
   const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 
   if (!SpeechRecognition) {
-    alert("Голосовой ввод работает не во всех браузерах. Попробуй Chrome.");
+    alert("Голосовой ввод работает не во всех браузерах. Лучше Chrome.");
     return;
   }
 
   const rec = new SpeechRecognition();
   rec.lang = "ru-RU";
+  rec.interimResults = false;
+  rec.maxAlternatives = 1;
+
   rec.start();
 
   rec.onresult = (event) => {
@@ -294,11 +299,17 @@ resetBtn.onclick = () => {
 };
 
 moveBtn.onclick = () => userTextMove(moveInput.value);
+
+moveInput.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") {
+    userTextMove(moveInput.value);
+  }
+});
+
 voiceBtn.onclick = startVoiceInput;
 
 levelEl.oninput = () => {
   levelText.textContent = levelEl.value;
 };
 
-startEngine();
 renderBoard();
